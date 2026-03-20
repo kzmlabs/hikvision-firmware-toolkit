@@ -1,8 +1,10 @@
-# Hikvision NVR/DVR Password Reset & Firmware Recovery Guide
+# Hikvision NVR/DVR Password Reset & Firmware Recovery Toolkit
 
 > **Factory reset a locked Hikvision NVR when all standard methods fail — using UART serial console and TFTP firmware flash.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%2F11-blue.svg)]()
+[![Tested: DS-7108NI-Q1/8P](https://img.shields.io/badge/Tested-DS--7108NI--Q1%2F8P-green.svg)]()
 
 ---
 
@@ -775,14 +777,36 @@ Upgrade trigger:      u (at upgrade menu)
 
 ---
 
+## Tested Hardware
+
+| Component | Details |
+|-----------|---------|
+| NVR | DS-7108NI-Q1/8P (Board: DS-8025 PcEV1.0) |
+| SoC | HiSilicon hi3536dv100 |
+| Original Firmware | V3.4.99 build 180706 |
+| Upgraded Firmware | V4.30.091 build 220919 |
+| device_class | 0x5DE (1502) |
+| USB-UART Adapter | PL2303HX clone (budget, works but unreliable) |
+| TFTP Server | tftpd64 v4.74 portable |
+
 ## Credits
 
-This guide was created from a real-world password reset session on a Hikvision DS-7108NI-Q1/8P NVR in Kharkiv, Ukraine (March 2026). The process involved extensive trial-and-error to find the correct firmware variant, establish reliable UART communication with a budget PL2303HX adapter, and navigate Hikvision's firmware ecosystem.
+This guide was created from a real-world password reset project. The process involved extensive trial-and-error to find the correct firmware variant for a CIS-regional hardware revision, establish reliable UART communication with a budget PL2303HX adapter, and navigate Hikvision's complex firmware ecosystem across multiple hardware revisions and regional variants.
 
 ## Contributing
 
-Found a working firmware for a different device_class? Fixed the Hik-Connect unbinding? Please open a PR or issue!
+Found a working firmware for a different `device_class`? Fixed the Hik-Connect cloud unbinding? Tested on a different NVR model? **Please open a PR or issue!**
+
+Community contributions that would be especially valuable:
+- Firmware compatibility results for other device_class values
+- UART pin mappings for other Hikvision NVR/DVR boards
+- Working unbinding methods for cloud-locked devices
+- Linux/macOS versions of the PowerShell scripts
+
+## Disclaimer
+
+This guide is for **legitimate device owners** who have lost access to their own equipment. Do not use this guide on devices you do not own. The authors are not responsible for any damage to equipment or violations of applicable laws.
 
 ## License
 
-MIT License — use at your own risk. The authors are not responsible for any damage to your equipment.
+[MIT License](LICENSE)

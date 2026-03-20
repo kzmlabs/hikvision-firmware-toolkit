@@ -1,0 +1,16 @@
+# Firmware files (too large for git)
+*.dav
+*.bin
+*.zip
+
+# TFTP server
+tftpd64/
+tftpd32/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
