@@ -1,0 +1,217 @@
+# Visual Diagrams
+
+## Overall Setup Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        COMPLETE SETUP                               │
+│                                                                     │
+│  ┌──────────┐    Ethernet Cable    ┌──────────────────────┐        │
+│  │          │◄────────────────────►│                      │        │
+│  │    PC    │   (Uplink port!)     │   Hikvision NVR      │        │
+│  │          │                      │   DS-7108NI-Q1/8P    │        │
+│  │ TFTP Srv │    USB Cable         │                      │        │
+│  │ 192.0.0  │◄──────────┐         │  Power: Own PSU      │        │
+│  │ .128     │           │         │  IP: 192.0.0.2       │        │
+│  └──────────┘    ┌──────┴───────┐ │                      │        │
+│                  │  USB-UART    │ │  ┌──────┐            │        │
+│                  │  Adapter     │ │  │ JP3  │←── UART    │        │
+│                  │  (PL2303/    ├─┼──┤ pins │   header   │        │
+│                  │   FT232RL)   │ │  └──────┘            │        │
+│                  └──────────────┘ └──────────────────────┘        │
+│                                                                     │
+│  WARNING: Do NOT connect VCC (red wire) from adapter to NVR!       │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## NVR Back Panel — Port Identification
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    NVR BACK PANEL                                 │
+│                                                                  │
+│  ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐     │
+│  │PoE1│ │PoE2│ │PoE3│ │PoE4│ │PoE5│ │PoE6│ │PoE7│ │PoE8│     │
+│  └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘ └────┘     │
+│  ▲ DO NOT use these for PC connection!                          │
+│                                                                  │
+│  ┌────────┐  ┌──────┐  ┌──────┐  ┌───────┐                    │
+│  │ LAN/   │  │ HDMI │  │ VGA  │  │ Power │                    │
+│  │ Uplink │  │      │  │      │  │  12V  │                    │
+│  └────────┘  └──────┘  └──────┘  └───────┘                    │
+│  ▲ USE THIS for Ethernet to PC!                                 │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+## JP3 UART Header — Pin Layout
+
+```
+NVR BOARD (top view, component side up)
+
+       Arrow/Dot marks Pin 1
+       ▼
+      ┌───┬───┬───┬───┐
+      │ 1 │ 2 │ 3 │ 4 │    JP3
+      │VCC│TX │RX │GND│
+      └─┬─┴─┬─┴─┬─┴─┬─┘
+        │   │   │   │
+        ×   │   │   │      × = DO NOT CONNECT (VCC)
+            │   │   │
+            │   │   └──── Black wire  (adapter GND)
+            │   └──────── Green wire  (adapter TX → NVR RX)
+            └──────────── White wire  (adapter RX ← NVR TX)
+```
+
+## Wire Connection Detail
+
+```
+USB-UART ADAPTER                              NVR BOARD (JP3)
+┌─────────────────┐                          ┌───┬───┬───┬───┐
+│                 │                          │ 1 │ 2 │ 3 │ 4 │
+│  ┌───┐          │    ╔══ Red (VCC) ═╗     │VCC│TX │RX │GND│
+│  │USB│          ├────╢  NOT CONNECTED╠──×  │   │   │   │   │
+│  │   │          │    ╚══════════════╝     │   │   │   │   │
+│  │   │          │                          │   │   │   │   │
+│  │   │    White ├──────────────────────────┼───┤   │   │   │
+│  │   │    (RX)  │    Receives data FROM NVR│   │◄──┘   │   │
+│  │   │          │                          │   │       │   │
+│  │   │    Green ├──────────────────────────┼───┼───────┤   │
+│  │   │    (TX)  │    Sends data TO NVR     │   │       │◄──┘
+│  │   │          │                          │   │       │   │
+│  │   │    Black ├──────────────────────────┼───┼───────┼───┤
+│  │   │    (GND) │    Ground reference      │   │       │   │◄──┘
+│  └───┘          │                          │   │       │   │
+└─────────────────┘                          └───┴───┴───┴───┘
+
+IMPORTANT: TX and RX are CROSSED!
+  Adapter TX (Green) ──► NVR RX (Pin 3)
+  Adapter RX (White) ◄── NVR TX (Pin 2)
+```
+
+## Typical USB-UART Adapter Wire Colors
+
+```
+┌──────────────────────────────────────────────┐
+│          COMMON WIRE COLOR MAPPING           │
+│                                              │
+│  Wire Color │ Function │ Connect to JP3      │
+│  ───────────┼──────────┼──────────────────── │
+│  Red        │ VCC      │ ██ DO NOT CONNECT   │
+│  Black      │ GND      │ → Pin 4 (GND)      │
+│  White      │ RX       │ → Pin 2 (NVR TX)   │
+│  Green      │ TX       │ → Pin 3 (NVR RX)   │
+│                                              │
+│  ⚠ Colors may vary! Check your adapter PCB  │
+│    labels: GND, TXD, RXD, VCC/3V3/5V       │
+└──────────────────────────────────────────────┘
+```
+
+## Network Setup Diagram
+
+```
+┌──────────────┐         Ethernet Cable        ┌──────────────────┐
+│              │◄─────────────────────────────►│                  │
+│  Windows PC  │         (direct connection)    │  Hikvision NVR   │
+│              │                                │                  │
+│  Ethernet:   │                                │  During TFTP:    │
+│  192.0.0.128 │                                │  192.0.0.2       │
+│  /24         │                                │                  │
+│              │                                │  After reset:    │
+│  TFTP Server │                                │  192.168.1.64    │
+│  (tftpd64)   │                                │  (default)       │
+│  Port: 69    │                                │                  │
+│              │                                │  Uplink port     │
+│  Serves:     │                                │  only! NOT PoE   │
+│  digicap.dav │                                │  ports!          │
+└──────────────┘                                └──────────────────┘
+```
+
+## TFTP Flash Process Flow
+
+```
+ Power ON NVR
+      │
+      ▼
+ ┌─────────────┐
+ │   U-Boot    │
+ │  Bootloader │
+ └──────┬──────┘
+        │
+        ▼
+ "Hit ctrl+u to stop autoboot: 1"
+        │
+        │◄─── Send Ctrl+U (0x15) via UART
+        ▼
+ ┌─────────────────────┐
+ │   Upgrade Menu      │
+ │   "Press [u/U] key" │
+ └──────────┬──────────┘
+            │◄─── Send 'u'
+            ▼
+ ┌─────────────────────┐
+ │  "Input device IP"  │──► Send: 192.0.0.2
+ │  "Input server IP"  │──► Send: 192.0.0.128
+ │  "Confirm? (y/n)"   │──► Send: y
+ └──────────┬──────────┘
+            │
+            ▼
+ ┌─────────────────────┐      ┌─────────────┐
+ │  TFTP Download      │◄────►│ TFTP Server │
+ │  digicap.dav        │      │ on PC       │
+ │  ~16MB              │      └─────────────┘
+ └──────────┬──────────┘
+            │
+            ▼
+    "cramfs.img checkSum ok"?
+       │              │
+      YES             NO
+       │              │
+       ▼              ▼
+ ┌────────────┐  "upgrade packet
+ │ Flash      │   mismatch"
+ │ Writing    │   → WRONG firmware
+ │ 0%→100%   │   → Try different
+ │ Checking   │     version
+ │ 0%→100%   │
+ └─────┬──────┘
+       │
+       ▼
+ "Update successfully!"
+       │
+       ▼
+ ┌─────────────┐
+ │  NVR Reboot │
+ │  (BEEP!)    │
+ └──────┬──────┘
+        │
+        ▼
+ ┌─────────────────┐
+ │  Setup Wizard   │
+ │  Set new        │
+ │  admin password │
+ └─────────────────┘
+```
+
+## Loopback Test Diagram
+
+```
+Before connecting to NVR, test your adapter:
+
+                  ┌─── Touch these two together ───┐
+                  │                                 │
+                  ▼                                 ▼
+┌─────────────────────────────────────────────────────┐
+│  USB-UART Adapter                                    │
+│                                                      │
+│  Red (VCC)  ──── leave disconnected                  │
+│  Black (GND) ─── leave disconnected                  │
+│  White (RX)  ────┐                                   │
+│                  ├──── twist/touch together           │
+│  Green (TX)  ────┘                                   │
+│                                                      │
+│  USB end ──── plugged into PC                        │
+└──────────────────────────────────────────────────────┘
+
+Run: scripts/loopback_test.ps1
+Expected: "SUCCESS! TX is working. Got back: HELLO123"
+```
