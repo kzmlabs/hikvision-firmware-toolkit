@@ -46,6 +46,7 @@
 8. [After Reset](#8-after-reset)
 9. [Firmware Upgrade to V4.x](#9-firmware-upgrade-to-v4x)
 10. [Hik-Connect Cloud Unbinding](#10-hik-connect-cloud-unbinding)
+    - [10.1 Remote Access Without Hik-Connect](#101-remote-access-without-hik-connect)
 11. [API Reference](#11-api-reference)
 12. [Troubleshooting](#12-troubleshooting)
 
@@ -292,7 +293,165 @@ If the NVR was bound to someone else's Hik-Connect account:
 - Portal: https://supportusa.hikvision.com
 - Phone: 1-855-655-9888 (Canada)
 
-**Alternative:** Use port forwarding + iVMS-4500 app for remote access without Hik-Connect.
+**Alternative:** Use port forwarding + DDNS for remote access without Hik-Connect. See [Section 10.1](#101-remote-access-without-hik-connect).
+
+### 10.1 Remote Access Without Hik-Connect
+
+If Hik-Connect is unusable (bound to old account, or you prefer not to depend on cloud), you can access the NVR directly over the internet using free DDNS + port forwarding.
+
+#### Architecture
+
+```
+                       REMOTE ACCESS — HOW IT WORKS
+                       ════════════════════════════
+
+ YOUR PHONE / LAPTOP                         THE INTERNET
+ (anywhere in the world)
+ ┌──────────────────┐                  ┌─────────────────────┐
+ │                  │                  │                     │
+ │  Browser:        │    ①            │   DDNS Provider     │
+ │  mynvr.ddns.net  │───────────────► │   (e.g. No-IP)     │
+ │  :9080           │  DNS lookup     │   ┌───────────────┐ │
+ │                  │                 │   │ mynvr.ddns.net│ │
+ │  iVMS-4500 app:  │  ◄─────────────│   │ = 1.2.3.4     │ │
+ │  port 9000       │    ②           │   └───────────────┘ │
+ │                  │  Answer: IP     └─────────────────────┘
+ │  RTSP player:    │                          ▲
+ │  port 554        │                          │
+ └────────┬─────────┘                          │ ⑤ NVR updates IP
+          │                                    │   periodically
+          │ ③ Connect to                       │
+          │   public IP:port                   │
+          ▼                                    │
+ ┌──────────────────────────────────────────────────────────────┐
+ │                      HOME NETWORK                             │
+ │                                                               │
+ │   ┌──────────────┐    Port Forward     ┌──────────────────┐  │
+ │   │              │    Rules:           │                  │  │
+ │   │    Router     │                     │  Hikvision NVR   │  │
+ │   │              │  :9080 ──────────►  │                  │  │
+ │   │ Public IP:   │  :9000 ──────────►  │  LAN IP:         │  │
+ │   │ 1.2.3.4     │  :554  ──────────►  │  192.168.X.X     │  │
+ │   │              │         ④           │                  │  │
+ │   └──────────────┘                     └──────────────────┘  │
+ └──────────────────────────────────────────────────────────────┘
+
+ FLOW:
+ ① Phone asks DDNS: "what IP is mynvr.ddns.net?"
+ ② DDNS answers with your home public IP
+ ③ Phone connects to your public IP on the forwarded port
+ ④ Router forwards traffic to NVR on the LAN
+ ⑤ NVR's built-in DDNS client keeps the IP up to date
+```
+
+#### DDNS Update Flow
+
+```
+ ┌──────────────────┐          HTTPS           ┌──────────────────┐
+ │  Hikvision NVR   │ ──────────────────────►  │  DDNS Server     │
+ │                  │  "My IP is 1.2.3.4"      │  (dynupdate.     │
+ │  Built-in DDNS   │                           │  no-ip.com)      │
+ │  client runs     │  ◄──────────────────────  │                  │
+ │  every ~5 min    │  "good" or "nochg"       │  Updates:        │
+ │                  │                           │  mynvr.ddns.net  │
+ └──────────────────┘                           │  → 1.2.3.4      │
+                                                └──────────────────┘
+```
+
+#### Setup Steps
+
+1. **Register free DDNS hostname** at [noip.com](https://www.noip.com) (3 free hostnames)
+   - Create hostname → select "DDNS Compatible Device" → generate DDNS Key
+
+2. **Configure DDNS on NVR** (Configuration → Network → DDNS):
+
+   | Field          | Value                         |
+   |----------------|-------------------------------|
+   | Enable DDNS    | checked                       |
+   | DDNS Type      | NO-IP                         |
+   | Server Address | `dynupdate.no-ip.com`         |
+   | Host Name      | `all.ddnskey.com`             |
+   | User Name      | your DDNS Key username        |
+   | Password       | your DDNS Key password        |
+
+   Or via ISAPI:
+   ```bash
+   curl --digest -u "admin:PASS" -X PUT "http://NVR_IP/ISAPI/System/Network/DDNS/1" \
+     -H "Content-Type: application/xml" \
+     -d '<DDNS xmlns="http://www.hikvision.com/ver20/XMLSchema">
+       <id>1</id><enabled>true</enabled><provider>NoIpDns</provider>
+       <serverAddress><addressingFormatType>hostname</addressingFormatType>
+         <hostName>dynupdate.no-ip.com</hostName></serverAddress>
+       <deviceDomainName>all.ddnskey.com</deviceDomainName>
+       <userName>YOUR_DDNS_KEY_USER</userName></DDNS>'
+   ```
+
+3. **Change default ports** (avoid conflicts and improve security):
+
+   ```bash
+   # HTTP 80 → 9080
+   curl --digest -u "admin:PASS" -X PUT "http://NVR_IP/ISAPI/Security/adminAccesses/1" \
+     -H "Content-Type: application/xml" \
+     -d '<AdminAccessProtocol xmlns="http://www.hikvision.com/ver20/XMLSchema">
+       <id>1</id><enabled>true</enabled><protocol>HTTP</protocol><portNo>9080</portNo>
+       </AdminAccessProtocol>'
+
+   # Server/SDK 8000 → 9000
+   curl --digest -u "admin:PASS" -X PUT "http://NVR_IP:9080/ISAPI/Security/adminAccesses/4" \
+     -H "Content-Type: application/xml" \
+     -d '<AdminAccessProtocol xmlns="http://www.hikvision.com/ver20/XMLSchema">
+       <id>4</id><enabled>true</enabled><protocol>DEV_MANAGE</protocol><portNo>9000</portNo>
+       </AdminAccessProtocol>'
+   ```
+
+4. **Port forward on router** (Forwarding → Virtual Servers):
+
+   | Service Port | Internal IP    | Internal Port | Protocol |
+   |-------------|----------------|---------------|----------|
+   | 9080        | 192.168.X.X    | 9080          | TCP      |
+   | 9000        | 192.168.X.X    | 9000          | TCP      |
+   | 554         | 192.168.X.X    | 554           | TCP/UDP  |
+
+   > Port 80 may conflict with router's remote management — use non-standard ports.
+
+5. **Reserve NVR IP** in router DHCP settings (bind MAC to fixed IP).
+
+6. **Access from internet:**
+   - Browser: `http://mynvr.ddns.net:9080`
+   - iVMS-4500: add device manually, address `mynvr.ddns.net`, port `9000`
+   - RTSP: `rtsp://admin:PASS@mynvr.ddns.net:554/Streaming/Channels/101`
+
+#### Comparison: Hik-Connect vs DDNS + Port Forward
+
+```
+ Hik-Connect (P2P cloud):
+   Phone ◄──► Hikvision Cloud ◄──► NVR
+   ✓ Zero config, works behind any NAT
+   ✗ Depends on Hikvision servers
+   ✗ Device binding is permanent and server-side
+   ✗ Cannot use if bound to another account
+
+ DDNS + Port Forward (direct):
+   Phone ──► Your Router ──► NVR
+   ✓ No cloud dependency
+   ✓ Works regardless of Hik-Connect binding
+   ✓ Free (No-IP free tier)
+   ✗ Requires router port forwarding
+   ✗ Some ISPs block common ports
+   ✗ No-IP free tier needs monthly email confirmation
+```
+
+#### Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| DDNS status "connServerfail" | Set DNS to `8.8.8.8` / `8.8.4.4` on NVR (TCP/IP → uncheck auto DNS) |
+| DDNS status "connecting" forever | Disable DDNS, wait 60s, re-enable with fresh credentials |
+| Can't access from internet | Verify port forwarding rules on router |
+| Works on LAN but not remotely | ISP may block port — try different port numbers |
+| Can't test DDNS from home WiFi | NAT hairpin not supported on most consumer routers — test from mobile data |
+| Router port 80 conflict | Router remote management uses port 80 — use 9080+ for NVR |
+| "badauth" in No-IP | Use DDNS Key credentials, not account email/password |
 
 ---
 
@@ -358,6 +517,7 @@ hikvision-firmware-toolkit/
 │   ├── uart_tftp_flash.ps1   ← Automated flash script
 │   ├── fix_ip.ps1            ← Lock Ethernet to 192.0.0.128
 │   └── setup_firewall.ps1    ← Windows Firewall rules
+├── REMOTE_ACCESS.md          ← DDNS + port forwarding setup (private, not in repo)
 ├── AGENT_GUIDE.md            ← Guide for AI assistants
 ├── DIAGRAMS.md               ← Visual wiring & flow diagrams
 ├── HOW_TO_RUN.md             ← How to run scripts
