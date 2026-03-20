@@ -305,7 +305,88 @@ Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 
 ## 8. Configure Network
 
-### Direct PC-to-NVR Connection
+### Understanding the IP Addresses
+
+During TFTP firmware flash, three IP addresses are involved:
+
+| Address | Who | Why |
+|---------|-----|-----|
+| **192.0.0.128** | Your PC (TFTP server) | Hikvision standard — the NVR expects the TFTP server here |
+| **192.0.0.2** | The NVR (during upgrade) | You type this when the NVR asks "ip address of device" |
+| **192.0.0.64** | The NVR (auto-recovery) | Used automatically when NVR is in recovery mode |
+
+These are **hardcoded in Hikvision's U-Boot bootloader**. You don't choose them — you must match them.
+
+### How We Discovered These IPs
+
+1. **192.0.0.128** — Standard Hikvision TFTP server IP, documented in official guides
+2. **192.0.0.2** — The NVR prompts you to enter a device IP; 192.0.0.2 works because it's on the same /24 subnet as the server
+3. **192.0.0.64** — Found by capturing network traffic during auto-recovery mode:
+```powershell
+# We captured raw packets and found the NVR broadcasting from 192.0.0.64
+$sock = New-Object System.Net.Sockets.Socket(...)
+# Saw: 192.0.0.64 -> 255.255.255.255 (UDP broadcast)
+```
+
+### Finding the NVR's IP After Boot (Normal Operation)
+
+After the NVR boots normally, it gets an IP via DHCP or uses a static one. To find it:
+
+**Method 1: Find by MAC address**
+```bash
+# The NVR's MAC is on its label. Scan ARP table:
+arp -a | grep "68-6d-bc"
+# Example output: 192.168.0.103    68-6d-bc-da-bc-85    dynamic
+```
+
+**Method 2: SADP Tool**
+Open SADP → Refresh → shows all Hikvision devices with their IPs
+
+**Method 3: Broadcast ping + ARP scan**
+```bash
+ping -n 1 192.168.0.255
+arp -a
+# Look for the NVR's MAC address in the list
+```
+
+**Method 4: Network packet capture**
+```powershell
+# Capture all packets to find NVR's IP
+$sock = New-Object System.Net.Sockets.Socket(
+    [System.Net.Sockets.AddressFamily]::InterNetwork,
+    [System.Net.Sockets.SocketType]::Raw,
+    [System.Net.Sockets.ProtocolType]::IP)
+$sock.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse("YOUR_IP"), 0)))
+$sock.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::IP,
+    [System.Net.Sockets.SocketOptionName]::HeaderIncluded, $true)
+$optIn = [BitConverter]::GetBytes(1)
+$sock.IOControl([System.Net.Sockets.IOControlCode]::ReceiveAll, $optIn, $null)
+# Read packets and look for unknown source IPs
+```
+
+### Hikvision Default IPs
+
+| Scenario | IP Address |
+|----------|-----------|
+| Factory default (new device) | 192.168.1.64 |
+| DHCP from router | Assigned by router (check SADP or ARP) |
+| Link-local (no DHCP, no static) | 169.254.x.x (random) |
+| During TFTP upgrade mode | 192.0.0.2 (you set this) |
+| Auto-recovery TFTP mode | 192.0.0.64 (hardcoded) |
+| TFTP server expected by NVR | 192.0.0.128 |
+
+### Your PC Needs Multiple IPs
+
+Your PC's Ethernet adapter may need different IPs for different tasks:
+
+| Task | PC IP Needed |
+|------|-------------|
+| TFTP firmware flash | 192.0.0.128 |
+| Access NVR web UI (after DHCP) | Same subnet as NVR (e.g., 192.168.0.x) |
+| Access NVR at factory default | 192.168.1.x |
+| Access NVR on link-local | 169.254.x.x |
+
+### Direct PC-to-NVR Connection (for TFTP)
 
 Connect Ethernet cable directly from PC to NVR's **uplink port** (NOT a PoE port!).
 
@@ -317,7 +398,9 @@ Connect Ethernet cable directly from PC to NVR's **uplink port** (NOT a PoE port
 └──────────┘                       └──────────────┘
 ```
 
-### Set Static IP
+> **Important:** Use the **uplink port**, not one of the 8 PoE ports! The PoE ports are for cameras.
+
+### Set Static IP for TFTP
 
 ```powershell
 # Remove all existing IPs from Ethernet
@@ -335,6 +418,19 @@ New-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress 192.0.0.128 -PrefixLength
 ```powershell
 Get-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4
 # Should show ONLY: 192.0.0.128
+```
+
+### Common IP Problem: tftpd64 Interface Switching
+
+Windows auto-assigns extra IPs (169.254.x.x) which causes tftpd64 to switch away from 192.0.0.128. Always clean up extra IPs before starting TFTP:
+
+```powershell
+# Run scripts/fix_ip.ps1 or:
+Get-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 | ForEach-Object {
+    if ($_.IPAddress -ne '192.0.0.128') {
+        Remove-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress $_.IPAddress -Confirm:$false
+    }
+}
 ```
 
 ---
