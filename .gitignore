@@ -1,7 +1,5 @@
-# Firmware files (too large for git)
-*.dav
+# Large downloads (not firmware we provide)
 *.bin
-*.zip
 
 # TFTP server
 tftpd64/

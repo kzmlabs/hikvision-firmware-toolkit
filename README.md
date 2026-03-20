@@ -8,654 +8,299 @@
 
 ---
 
-## The Problem
+## When to Use This Guide
 
-You have a Hikvision NVR/DVR and:
-- Admin password is lost or forgotten
-- SADP tool password reset shows "Export/Import device feature code Mode" (newer firmware — old algorithm doesn't work)
-- Hikvision support is unresponsive or slow
-- Security questions were never configured
-- No physical reset button exists on the board
-- Default passwords (admin/12345, admin/admin, etc.) don't work
+- Admin password lost, SADP reset code doesn't work
+- Hikvision support unresponsive
+- No physical reset button on the board
+- Default passwords don't work
 
-**This guide will walk you through resetting the device using the UART serial debug console and flashing firmware via TFTP, which resets everything to factory defaults.**
-
-## What We Achieved
-
-| Task | Status |
-|------|--------|
-| UART serial console access | Done |
-| Password reset via firmware flash | Done |
-| Firmware upgrade V3.4.99 → V4.30.091 | Done |
-| HDD format & overwrite configuration | Done |
-| Hik-Connect cloud unbinding | Requires Hikvision support (server-side) |
-
-**Tested on:** DS-7108NI-Q1/8P (Board: DS-8025 PcEV1.0, HiSilicon hi3536dv100)
+**Tested on:** DS-7108NI-Q1/8P (HiSilicon hi3536dv100)
 **Applicable to:** Most Hikvision NVRs/DVRs with HiSilicon SoC and U-Boot bootloader
+
+---
+
+## Quick Start
+
+```
+1. Connect USB-UART adapter to NVR's JP3 header
+2. Setup TFTP server (192.0.0.128) with digicap.dav firmware
+3. Connect Ethernet direct PC ↔ NVR uplink port
+4. Open PuTTY (Serial, 115200 baud)
+5. Hold Ctrl+U, power on NVR → enter upgrade mode
+6. Type: u → 192.0.0.2 → 192.0.0.128 → y
+7. Wait for "Update successfully!" → NVR reboots with factory defaults
+```
 
 ---
 
 ## Table of Contents
 
 1. [Hardware Required](#1-hardware-required)
-2. [Identify UART Pins](#2-identify-uart-pins)
-3. [USB-UART Adapter Setup](#3-usb-uart-adapter-setup)
-4. [Wire Connection](#4-wire-connection)
-5. [Verify UART Communication](#5-verify-uart-communication)
-6. [Find the Correct Firmware](#6-find-the-correct-firmware)
-7. [Setup TFTP Server](#7-setup-tftp-server)
-8. [Configure Network](#8-configure-network)
-9. [Flash Firmware via PuTTY (Recommended)](#9-flash-firmware-via-putty-recommended)
-10. [Flash Firmware via Script (Alternative)](#10-flash-firmware-via-script-alternative)
-11. [After Successful Flash](#11-after-successful-flash)
-12. [Firmware Upgrade to V4.x](#12-firmware-upgrade-to-v4x)
-13. [Hik-Connect Cloud Unbinding](#13-hik-connect-cloud-unbinding)
-14. [NVR Configuration via API](#14-nvr-configuration-via-api)
-15. [Troubleshooting](#15-troubleshooting)
+2. [UART Wiring](#2-uart-wiring)
+3. [USB-UART Driver Setup](#3-usb-uart-driver-setup)
+4. [Firmware Selection](#4-firmware-selection)
+5. [Network & TFTP Setup](#5-network--tftp-setup)
+6. [Flash Firmware via PuTTY](#6-flash-firmware-via-putty)
+7. [Flash Firmware via Script](#7-flash-firmware-via-script)
+8. [After Reset](#8-after-reset)
+9. [Firmware Upgrade to V4.x](#9-firmware-upgrade-to-v4x)
+10. [Hik-Connect Cloud Unbinding](#10-hik-connect-cloud-unbinding)
+11. [API Reference](#11-api-reference)
+12. [Troubleshooting](#12-troubleshooting)
 
 ---
 
 ## 1. Hardware Required
 
-| Item | Description | Cost |
-|------|-------------|------|
-| **USB-to-UART TTL adapter** | FT232RL recommended (3.3V/5V jumper). PL2303HX works but unreliable. CH340 also OK. | $3-10 |
-| **Dupont wires** | Female-to-female, 20cm, at least 3 wires (GND, TX, RX) | $2-5 |
-| **Ethernet cable** | Cat5e/Cat6, direct PC-to-NVR connection for TFTP | — |
-| **PC with Windows** | For TFTP server, PuTTY terminal, and scripts | — |
+| Item | Recommended | Cost |
+|------|------------|------|
+| USB-UART adapter | **FT232RL** (3.3V/5V jumper) | $3-10 |
+| Dupont wires | Female-to-female, 3 wires | $2-5 |
+| Ethernet cable | Direct PC-to-NVR connection | — |
 
-### Adapter Comparison
-
-| Adapter | Voltage | Windows Driver | Reliability | Recommended |
-|---------|---------|---------------|-------------|-------------|
-| **FT232RL** | 3.3V/5V jumper | Auto-install | Excellent | Yes |
-| **CH340** | Varies | Auto or manual | Good | Yes |
-| **CP2102** | 3.3V | Auto-install | Excellent | Yes |
-| **PL2303HX** | 5V only | Needs driver hack | Poor (clones disconnect) | No |
-
-> **Warning:** The NVR UART operates at 3.3V TTL. Set your adapter to 3.3V if possible. 5V adapters work for receiving data but some NVRs may not read 5V input reliably.
+> PL2303HX works but is unreliable (disconnects during power cycles). CH340 and CP2102 also work.
 
 ---
 
-## 2. Identify UART Pins
+## 2. UART Wiring
 
-### DS-7108NI-Q1/8P (Board: DS-8025 PcEV1.0)
-
-The debug UART is on connector **JP3** — a 4-pin header near the top-left of the board.
+### JP3 Header on DS-7108NI-Q1/8P
 
 ```
-JP3 Pin Layout (arrow/dot marks Pin 1):
-
-  Arrow
-   ▼
-  ┌───┬───┬───┬───┐
-  │ 1 │ 2 │ 3 │ 4 │
-  │VCC│ TX│ RX│GND│
-  └───┴───┴───┴───┘
-   ▲              ▲
-   DO NOT         Connect
-   CONNECT!       here
+Arrow
+ ▼
+┌───┬───┬───┬───┐
+│ 1 │ 2 │ 3 │ 4 │  JP3
+│VCC│ TX│ RX│GND│
+└───┴───┴───┴───┘
+ ✕   ↓   ↓   ↓
+ NC  WH  GR  BK    (adapter wires)
 ```
 
-| Pin | Function | Description |
-|-----|----------|-------------|
-| 1 (arrow) | VCC (3.3V) | **DO NOT CONNECT** — can damage adapter |
-| 2 | TX (NVR transmits) | Connect to adapter's **RX** wire |
-| 3 | RX (NVR receives) | Connect to adapter's **TX** wire |
-| 4 | GND | Connect to adapter's **GND** wire |
+| NVR Pin | Adapter Wire | Color | Note |
+|---------|-------------|-------|------|
+| Pin 1 (VCC) | **DO NOT CONNECT** | Red | Tape it off! |
+| Pin 2 (TX) | RX (adapter receives) | White | NVR sends → adapter receives |
+| Pin 3 (RX) | TX (adapter sends) | Green | Adapter sends → NVR receives |
+| Pin 4 (GND) | GND | Black | Ground reference |
 
-### How to Verify GND (with multimeter)
+> **TX/RX are crossed!** Adapter TX → NVR RX, Adapter RX ← NVR TX.
 
-1. Set multimeter to continuity/beep mode
-2. Touch one probe to a known ground (metal shield of USB/HDMI port)
-3. Touch other probe to each JP3 pin — the one that beeps = GND
+### Verify Connection
 
-### Without Multimeter
+| UART Output | Meaning | Fix |
+|------------|---------|-----|
+| Boot text visible | Working! | Proceed |
+| All `0x00` | TX/RX swapped | Swap white & green |
+| All `0xFF` | Console silent | Power cycle NVR |
+| Nothing | No connection | Check wires, adapter, COM port |
 
-Look for the arrow/dot/square pad marking on the PCB — that's Pin 1. Count from there.
+### Loopback Test
+
+Touch TX + RX wires together → run `scripts/loopback_test.ps1` → should print "SUCCESS"
 
 ---
 
-## 3. USB-UART Adapter Setup
+## 3. USB-UART Driver Setup
 
-### PL2303HX Driver Fix (Windows 10/11)
+### PL2303HX on Windows 10/11 (driver fix)
 
-PL2303HX clones show as "USB-Serial Controller D" with an error. Fix:
-
-1. Open **Device Manager** (`Win+R` → `devmgmt.msc`)
-2. Find **USB-Serial Controller D** (yellow ⚠ warning)
-3. Right-click → **Update driver**
-4. **Browse my computer for drivers**
-5. **Let me pick from a list of available drivers on my computer**
-6. Select **Ports (COM & LPT)** → Next
-7. Manufacturer: **Microsoft** → Model: **USB Serial Device** → Next
-8. Click **Yes** on the compatibility warning
-9. Note the **COM port number** (e.g., COM3)
-
-```
-Before:                              After:
-┌──────────────────────┐            ┌──────────────────────┐
-│ ⚠ USB-Serial         │     →     │ ✓ USB Serial Device  │
-│   Controller D       │            │   (COM3)             │
-│   Status: Error      │            │   Status: OK         │
-└──────────────────────┘            └──────────────────────┘
-```
-
-> **Note:** This driver fix may need to be repeated after Windows updates or replugging the adapter.
+1. Device Manager → find "USB-Serial Controller D" (⚠ error)
+2. Right-click → Update driver → Browse → Let me pick from list
+3. Select: **Ports (COM & LPT)** → **Microsoft** → **USB Serial Device**
+4. Click Yes on warning → Note COM port number
 
 ### FT232RL / CH340 / CP2102
 
-Usually auto-installs. Check Device Manager → Ports for the COM port number.
+Drivers auto-install. Check Device Manager → Ports for COM number.
 
 ---
 
-## 4. Wire Connection
+## 4. Firmware Selection
 
-### Wiring Diagram
+### CRITICAL: Firmware Must Match Your device_class
 
+The NVR rejects firmware with wrong `device_class`. You'll see:
 ```
-USB-UART Adapter              JP3 on NVR Board
-────────────────              ────────────────
-GND (Black)    ─────────────► Pin 4 (GND)
-TX  (Green)    ─────────────► Pin 3 (NVR RX)     ← ACTIVE: sends TO NVR
-RX  (White)    ◄─────────────  Pin 2 (NVR TX)     ← ACTIVE: receives FROM NVR
-VCC (Red)      ────── ✕ ────  Pin 1 (VCC)         ← DO NOT CONNECT!
-```
-
-### Critical Rules
-
-1. **TX/RX are CROSSED**: Adapter TX → NVR RX, Adapter RX ← NVR TX
-2. **NEVER connect VCC** — tape off the red wire
-3. **Power the NVR from its own power supply**
-4. Wire colors vary between adapters — always check PCB labels
-
-### Common Wire Colors
-
-| Wire | Function | Connects to |
-|------|----------|-------------|
-| Red | VCC | **DO NOT CONNECT** |
-| Black | GND | JP3 Pin 4 |
-| White | RX (adapter receives) | JP3 Pin 2 (NVR TX) |
-| Green | TX (adapter sends) | JP3 Pin 3 (NVR RX) |
-
-### Loopback Test (Verify Adapter Works)
-
-Before connecting to the NVR:
-
-1. Touch TX and RX wires together (green + white)
-2. Run `scripts/loopback_test.ps1`
-3. Expected: `"SUCCESS! TX is working. Got back: HELLO123"`
-
-### Dealing with Loose Connections
-
-Dupont connectors often don't grip header pins well. Tips:
-- Squeeze the metal crimp slightly with pliers
-- Hold wires in place with electrical tape
-- Use male-to-female jumper wires
-
----
-
-## 5. Verify UART Communication
-
-### Serial Settings
-
-| Parameter | Value |
-|-----------|-------|
-| Baud rate | **115200** |
-| Data bits | **8** |
-| Stop bits | **1** |
-| Parity | **None** |
-| Flow control | **None** |
-
-### Quick Test
-
-1. Connect wires to NVR JP3 (NVR should be OFF)
-2. Open PuTTY → Serial → COM port → Speed 115200 → Open
-3. Power ON the NVR
-4. You should see U-Boot text scrolling
-
-### Diagnostic Results
-
-| What You See | Meaning | Action |
-|-------------|---------|--------|
-| U-Boot text, boot messages | **Working!** | Proceed to firmware flash |
-| All `0xFF` bytes | UART idle, console silent | NVR already booted — power cycle to see boot messages |
-| All `0x00` bytes | TX/RX wires are **swapped** | Swap white and green wires |
-| Garbage/random characters | Wrong baud rate | Try 9600, 57600 |
-| Nothing at all | No connection | Check wires, adapter, COM port |
-
----
-
-## 6. Find the Correct Firmware
-
-### CRITICAL: Firmware Must Match Your Hardware
-
-Each Hikvision NVR has a `device_class` identifier. During TFTP flash, the NVR checks if the firmware contains a matching packet. If not:
-
-```
-The board info: language - 0x1 device_class - 0x5DE oemCode - 0x1
 upgrade packet mismatch, please select correct packet
-Can not find correct packet for upgrade, give up!!!
 ```
 
-### Firmware for DS-7108NI-Q1/8P (device_class 0x5DE, CIS/CCRR variant)
+### Working Firmware for DS-7108NI-Q1/8P (device_class 0x5DE)
 
-After extensive testing, these are the results:
+| Firmware | Version | Use For | Download |
+|----------|---------|---------|----------|
+| **digicap.dav** | V3.4.x | Password reset | [firmware/v3.4.x_recovery_digicap.dav](firmware/) |
+| **NVR_K75_NEU** | V4.30.080 | V4 upgrade | [firmware/v4.30.080_K75_NEU_digicap.dav](firmware/) |
+| **Official** | V4.30.091 | Best option | [firmware/v4.30.091_official_digicap.dav](firmware/) |
 
-| Firmware Package | Source Folder | Version | Size | Result |
-|-----------------|---------------|---------|------|--------|
-| **digicap.dav** (base) | `fiesa.com.ar/DS-7108NI-Q18P/` | V3.4.x | 16MB | **WORKS** — password reset |
-| **NVR_K75_BL_ML_A_NEU** | EU Portal `[7100NI-Q1]` | V4.30.080 | 16MB | **WORKS** — V4 upgrade |
-| **Official from support** | Hikvision support link | V4.30.091 | 16MB | **WORKS** — best option |
-| NVR_K74_BL_ML_STD | EU Portal `[76NI-Q1(Q2)]` | V4.30.085 | 32MB | REJECTED |
-| NVR_K9B2_BL_ML_STD | EU Portal `[76NI-Q1(Q2)](C)` | V4.31.102 | 31MB | REJECTED |
-| NVR_K21B2 | EU Portal `76NI-Q1(Q2)(D)` | V4.74.115 | — | REJECTED |
+> **Key insight:** V4 firmware is in `[7100NI-Q1]` folder (K75 series), NOT `[76NI-Q1(Q2)]` (K74). The folder name doesn't always match the model!
 
-> **Key Insight:** The V4 upgrade firmware is in the `[7100NI-Q1]` folder (K75 "NEU" series), NOT the `[76NI-Q1(Q2)]` folder (K74 series). The folder name does NOT always match the device model!
+### Rejected Firmware (tested, doesn't work)
 
-### Where to Download
+NVR_K74, NVR_K9B2, NVR_K21B2, DS-7108NI-Q18P_V4.76.107 — all "upgrade packet mismatch"
 
-1. **V3.4.x (for password reset):**
-   `https://descargas.fiesa.com.ar/descargas/Hikvision/Firmware/NVRS/DS-7108NI-Q18P/digicap.dav`
-
-2. **V4.30 (for upgrade):**
-   Hikvision EU Portal → Technical Materials → 02 NVR → 00 Product Firmware → 06 Q-series → [7100NI-Q1] → V4.30.080
-
-3. **Official firmware:**
-   Contact Hikvision support with your serial number — they provide the exact firmware for your hardware variant.
-
-### For Other Models
-
-If the firmware is rejected with "upgrade packet mismatch":
-- Note the `device_class` value from the error
-- Try firmware from **different folders** on the EU portal
-- Try the "NEU" (neutral) variant if available
-- Contact Hikvision support for region-specific firmware
+See [firmware/README.md](firmware/README.md) for full compatibility matrix and download links.
 
 ---
 
-## 7. Setup TFTP Server
+## 5. Network & TFTP Setup
 
-### Download tftpd64
+### IP Addresses
 
-1. Download from: https://github.com/PJO2/tftpd64/releases (portable version)
-2. Extract to a folder (e.g., `C:\tftpd64\`)
-3. Place `digicap.dav` firmware file in the same folder
+| Address | Who | Purpose |
+|---------|-----|---------|
+| **192.0.0.128** | Your PC | TFTP server (Hikvision standard) |
+| **192.0.0.2** | NVR | During manual upgrade mode |
+| **192.168.1.64** | NVR | Factory default after reset |
 
-### Configure tftpd64
+### Setup Steps
 
-1. Run `tftpd64.exe`
-2. **Current Directory:** folder containing `digicap.dav`
-3. **Server interfaces:** select `192.0.0.128` from dropdown
+1. **Connect** Ethernet cable direct from PC to NVR **uplink port** (not PoE!)
 
-> **Common Problem:** Windows auto-assigns extra IPs (169.254.x.x) which causes tftpd64 to switch interfaces. Fix: remove all extra IPs and keep only 192.0.0.128.
-
-### Windows Firewall
-
-Run as Administrator:
+2. **Set PC IP:**
 ```powershell
-New-NetFirewallRule -DisplayName 'TFTP In' -Direction Inbound -Protocol UDP -Action Allow
-New-NetFirewallRule -DisplayName 'TFTP Out' -Direction Outbound -Protocol UDP -Action Allow
+# Run scripts/fix_ip.ps1 or:
+Set-NetIPInterface -InterfaceAlias 'Ethernet' -Dhcp Disabled
+New-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress 192.0.0.128 -PrefixLength 24
 ```
 
-Or temporarily disable the firewall entirely:
+3. **Start TFTP server:**
+   - Download [tftpd64 portable](https://github.com/PJO2/tftpd64/releases)
+   - Place `digicap.dav` in tftpd64 folder
+   - Run tftpd64.exe → select **192.0.0.128** in Server interfaces dropdown
+
+4. **Disable firewall:**
 ```powershell
 Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
 ```
 
----
+> **Common problem:** Windows auto-assigns 169.254.x.x IPs which makes tftpd64 switch interfaces. Always run `scripts/fix_ip.ps1` first.
 
-## 8. Configure Network
+### Finding NVR IP After Boot
 
-### Understanding the IP Addresses
-
-During TFTP firmware flash, three IP addresses are involved:
-
-| Address | Who | Why |
-|---------|-----|-----|
-| **192.0.0.128** | Your PC (TFTP server) | Hikvision standard — the NVR expects the TFTP server here |
-| **192.0.0.2** | The NVR (during upgrade) | You type this when the NVR asks "ip address of device" |
-| **192.0.0.64** | The NVR (auto-recovery) | Used automatically when NVR is in recovery mode |
-
-These are **hardcoded in Hikvision's U-Boot bootloader**. You don't choose them — you must match them.
-
-### How We Discovered These IPs
-
-1. **192.0.0.128** — Standard Hikvision TFTP server IP, documented in official guides
-2. **192.0.0.2** — The NVR prompts you to enter a device IP; 192.0.0.2 works because it's on the same /24 subnet as the server
-3. **192.0.0.64** — Found by capturing network traffic during auto-recovery mode:
-```powershell
-# We captured raw packets and found the NVR broadcasting from 192.0.0.64
-$sock = New-Object System.Net.Sockets.Socket(...)
-# Saw: 192.0.0.64 -> 255.255.255.255 (UDP broadcast)
-```
-
-### Finding the NVR's IP After Boot (Normal Operation)
-
-After the NVR boots normally, it gets an IP via DHCP or uses a static one. To find it:
-
-**Method 1: Find by MAC address**
 ```bash
-# The NVR's MAC is on its label. Scan ARP table:
+# By MAC address:
 arp -a | grep "68-6d-bc"
-# Example output: 192.168.0.103    68-6d-bc-da-bc-85    dynamic
-```
 
-**Method 2: SADP Tool**
-Open SADP → Refresh → shows all Hikvision devices with their IPs
-
-**Method 3: Broadcast ping + ARP scan**
-```bash
-ping -n 1 192.168.0.255
-arp -a
-# Look for the NVR's MAC address in the list
-```
-
-**Method 4: Network packet capture**
-```powershell
-# Capture all packets to find NVR's IP
-$sock = New-Object System.Net.Sockets.Socket(
-    [System.Net.Sockets.AddressFamily]::InterNetwork,
-    [System.Net.Sockets.SocketType]::Raw,
-    [System.Net.Sockets.ProtocolType]::IP)
-$sock.Bind((New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse("YOUR_IP"), 0)))
-$sock.SetSocketOption([System.Net.Sockets.SocketOptionLevel]::IP,
-    [System.Net.Sockets.SocketOptionName]::HeaderIncluded, $true)
-$optIn = [BitConverter]::GetBytes(1)
-$sock.IOControl([System.Net.Sockets.IOControlCode]::ReceiveAll, $optIn, $null)
-# Read packets and look for unknown source IPs
-```
-
-### Hikvision Default IPs
-
-| Scenario | IP Address |
-|----------|-----------|
-| Factory default (new device) | 192.168.1.64 |
-| DHCP from router | Assigned by router (check SADP or ARP) |
-| Link-local (no DHCP, no static) | 169.254.x.x (random) |
-| During TFTP upgrade mode | 192.0.0.2 (you set this) |
-| Auto-recovery TFTP mode | 192.0.0.64 (hardcoded) |
-| TFTP server expected by NVR | 192.0.0.128 |
-
-### Your PC Needs Multiple IPs
-
-Your PC's Ethernet adapter may need different IPs for different tasks:
-
-| Task | PC IP Needed |
-|------|-------------|
-| TFTP firmware flash | 192.0.0.128 |
-| Access NVR web UI (after DHCP) | Same subnet as NVR (e.g., 192.168.0.x) |
-| Access NVR at factory default | 192.168.1.x |
-| Access NVR on link-local | 169.254.x.x |
-
-### Direct PC-to-NVR Connection (for TFTP)
-
-Connect Ethernet cable directly from PC to NVR's **uplink port** (NOT a PoE port!).
-
-```
-┌──────────┐    Ethernet Cable     ┌──────────────┐
-│    PC    │◄─────────────────────►│  NVR Uplink  │
-│192.0.0   │    (direct, no       │  Port        │
-│  .128    │     router!)          │              │
-└──────────┘                       └──────────────┘
-```
-
-> **Important:** Use the **uplink port**, not one of the 8 PoE ports! The PoE ports are for cameras.
-
-### Set Static IP for TFTP
-
-```powershell
-# Remove all existing IPs from Ethernet
-Get-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 | ForEach-Object {
-    Remove-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress $_.IPAddress -Confirm:$false -ErrorAction SilentlyContinue
-}
-# Disable DHCP
-Set-NetIPInterface -InterfaceAlias 'Ethernet' -Dhcp Disabled
-# Set static IP
-New-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress 192.0.0.128 -PrefixLength 24
-```
-
-### Verify
-
-```powershell
-Get-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4
-# Should show ONLY: 192.0.0.128
-```
-
-### Common IP Problem: tftpd64 Interface Switching
-
-Windows auto-assigns extra IPs (169.254.x.x) which causes tftpd64 to switch away from 192.0.0.128. Always clean up extra IPs before starting TFTP:
-
-```powershell
-# Run scripts/fix_ip.ps1 or:
-Get-NetIPAddress -InterfaceAlias 'Ethernet' -AddressFamily IPv4 | ForEach-Object {
-    if ($_.IPAddress -ne '192.0.0.128') {
-        Remove-NetIPAddress -InterfaceAlias 'Ethernet' -IPAddress $_.IPAddress -Confirm:$false
-    }
-}
+# Or use SADP Tool for discovery
 ```
 
 ---
 
-## 9. Flash Firmware via PuTTY (Recommended)
+## 6. Flash Firmware via PuTTY
 
-**This is the most reliable method.** You see everything in real-time and control the timing.
+**Recommended method** — you see everything and control the timing.
 
-### Prerequisites
-- UART wires connected to JP3
-- TFTP server running on 192.0.0.128 with `digicap.dav`
-- Ethernet cable direct PC ↔ NVR uplink port
-- PuTTY open: Serial, your COM port, 115200 baud
+### Setup
 
-### Step-by-Step
+- PuTTY: Serial → your COM port → Speed 115200 → Open
+- TFTP server running on 192.0.0.128
+- Ethernet direct PC ↔ NVR
+
+### Steps
 
 1. **NVR must be OFF**
-2. Click inside PuTTY window
-3. **Hold Ctrl+U** on keyboard (keep holding!)
-4. **Power ON the NVR** with other hand (keep holding Ctrl+U)
-5. Watch boot text scroll — keep holding Ctrl+U
-6. Release when you see the upgrade menu
+2. Click PuTTY window, **hold Ctrl+U**
+3. **Power ON NVR** (keep holding Ctrl+U)
+4. When you see upgrade menu, release Ctrl+U
 
-You should see:
-```
-U-Boot 2010.06-svn19235 (Jan 15 2018 - 20:50:54)
-Hit ctrl+u to stop autoboot:  1  0
-
-This program will upgrade software.
-*******************************************************
-*  ATTENTION!! PLEASE READ THIS NOTICE CAREFULLY!     *
-...
-Now press [u/U] key to upgrade software:
-```
-
-7. Type **u** + Enter
+5. **Type responses:**
 
 ```
-File system error, please upgrade by TFTP
-Please input ip address of device:
+Now press [u/U] key to upgrade software: u
+Please input ip address of device: 192.0.0.2
+Please input ip address of upgrade server: 192.0.0.128
+Confirm?(y/n): y
 ```
 
-8. Type **192.0.0.2** + Enter
-
+6. **Watch for result:**
 ```
-Please input ip address of upgrade server:
-```
-
-9. Type **192.0.0.128** + Enter
-
-```
-Confirm?(y/n):
-```
-
-10. Type **y** + Enter
-
-11. Watch the TFTP transfer:
-```
-TFTP from server 192.0.0.128; our IP address is 192.0.0.2
-Download Filename 'digicap.dav'.
-Downloading: *###########################
-done
-Bytes transferred = 16007532
-```
-
-12. Watch for the result:
-```
-cramfs.img checkSum ok !           ← FIRMWARE ACCEPTED!
+cramfs.img checkSum ok !        ← ACCEPTED! Don't touch!
 ```
 or:
 ```
-upgrade packet mismatch            ← WRONG FIRMWARE, try another
+upgrade packet mismatch         ← Wrong firmware. Replace digicap.dav and retry
 ```
 
-13. If accepted, **DO NOT TOUCH ANYTHING!** Wait for:
+7. **If accepted, wait for flash to complete:**
 ```
-Writing ...
-|##################################################| 100%
-Done
-Checking ...
-|##################################################| 100%
-Done
+Writing ...  |##################################################| 100%
+Checking ... |##################################################| 100%
 Update successfully !
-Press ENTER key to reboot
 ```
 
-### Trying Multiple Firmware Files
-
-If the firmware is rejected ("upgrade packet mismatch"), the NVR returns to the IP prompt. You can:
-
-1. **Replace `digicap.dav`** in the TFTP folder with a different firmware
-2. Type the IPs again (**192.0.0.2**, **192.0.0.128**, **y**)
-3. No need to power cycle — try multiple firmware files in one session!
+> **Tip:** If firmware is rejected, the NVR returns to the IP prompt. Just replace `digicap.dav` in the TFTP folder and type the IPs again — no need to power cycle!
 
 ---
 
-## 10. Flash Firmware via Script (Alternative)
+## 7. Flash Firmware via Script
 
-If you prefer automation, use `scripts/uart_tftp_flash.ps1`. See [HOW_TO_RUN.md](HOW_TO_RUN.md) for instructions.
+Alternative to PuTTY — use `scripts/uart_tftp_flash.ps1`.
 
-> **Note:** The PuTTY method is more reliable because PL2303HX adapters tend to disconnect during automated sessions.
-
----
-
-## 11. After Successful Flash
-
-After "Update successfully!" the NVR reboots with factory defaults:
-
-1. **Set new admin password** — via HDMI monitor setup wizard or SADP tool
-2. **Set date/time** — the CMOS battery may be dead (shows 1970-01-01)
-3. **Enable NTP** — Configuration → System → System Settings → Time Settings
-4. **Configure network** — set static IP or enable DHCP
-5. **Format HDD** — Configuration → Storage → Storage Management → Init
-6. **Enable overwrite** — so recordings loop when HDD is full
-7. **Re-add cameras** — Configuration → Camera Management
-
-### Configure via API (Faster)
-
-```bash
-# Format HDD
-curl --digest -u "admin:PASSWORD" "http://NVR_IP/ISAPI/ContentMgmt/Storage/hdd/1/format" -X PUT
-
-# Enable overwrite/recycling
-curl --digest -u "admin:PASSWORD" "http://NVR_IP/ISAPI/ContentMgmt/Storage/hdd/1" -X PUT \
-  -H "Content-Type: application/xml" \
-  -d '<hdd><id>1</id><property>RW</property><overWrite>true</overWrite></hdd>'
-
-# Check HDD status
-curl --digest -u "admin:PASSWORD" "http://NVR_IP/ISAPI/ContentMgmt/Storage/hdd"
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\uart_tftp_flash.ps1
 ```
 
+See [HOW_TO_RUN.md](HOW_TO_RUN.md) for details. PuTTY method is more reliable.
+
 ---
 
-## 12. Firmware Upgrade to V4.x
+## 8. After Reset
 
-After the password reset with V3.4.x firmware, you can upgrade to V4.x for new features.
+The NVR reboots with factory defaults:
 
-### Method 1: TFTP (same process as password reset)
+1. **Set new admin password** (HDMI wizard or SADP)
+2. **Set date/time** and enable NTP
+3. **Format HDD** and enable overwrite (see API below)
+4. **Configure network** (static IP or DHCP)
+5. **Re-add cameras**
 
-1. Replace `digicap.dav` in TFTP folder with V4.x firmware
-2. Enter upgrade mode via PuTTY (Ctrl+U during boot)
-3. Flash as described in [Section 9](#9-flash-firmware-via-putty-recommended)
+---
 
-### Method 2: Web API Upload (V4.30+ only)
+## 9. Firmware Upgrade to V4.x
 
-Once the NVR is running V4.30+, you can upload firmware via the web API:
+After password reset with V3.4.x, upgrade to V4.x:
 
+**Method 1: TFTP** — same process as password reset, use V4.x firmware file
+
+**Method 2: Web API** (V4.30+ only):
 ```bash
 curl --digest -u "admin:PASSWORD" "http://NVR_IP/ISAPI/System/updateFirmware" \
   -X PUT -T digicap.dav -H "Content-Type: application/octet-stream"
-```
-
-Then reboot:
-```bash
 curl --digest -u "admin:PASSWORD" "http://NVR_IP/ISAPI/System/reboot" -X PUT
 ```
 
-> **Note:** The web API upload does NOT work on V3.4.x firmware — only TFTP.
-
-### Method 3: USB Flash Drive
-
-1. Copy `digicap.dav` to USB stick
-2. Plug into NVR's USB port
-3. HDMI menu → Maintenance → Upgrade → Local Upgrade
+**Method 3: USB flash drive** — copy `digicap.dav` to USB, plug into NVR, upgrade from HDMI menu
 
 ---
 
-## 13. Hik-Connect Cloud Unbinding
+## 10. Hik-Connect Cloud Unbinding
 
-### The Problem
-
-If the NVR was previously bound to someone else's Hik-Connect account, you'll see:
-- SADP Unbind: "Failed"
-- Hik-Connect app: "unbinding current device not supported"
-- Full factory reset does NOT clear the cloud binding
-
-The binding is **server-side** on Hikvision's cloud servers — nothing you do on the device will remove it.
-
-### What We Tried (All Failed)
+If the NVR was bound to someone else's Hik-Connect account:
 
 | Method | Result |
 |--------|--------|
-| SADP Unbind button | "Failed" |
-| Hik-Connect app unbind | "unbinding current device not supported" |
-| GuardingVision app unbind | "device is offline" |
-| Disable/re-enable EZVIZ via API | Binding persists |
-| Full factory reset via API | Binding persists |
-| Partial factory reset | Binding persists |
-| Change Hik-Connect server region | Other regions show "Offline" |
-| Firmware upgrade V3.4 → V4.30 | Binding still persists |
+| SADP Unbind | "Failed" |
+| Hik-Connect app | "unbinding current device not supported" |
+| Factory reset | Does NOT clear cloud binding |
+| Firmware upgrade | Does NOT clear cloud binding |
 
-### The Only Solution
+**The binding is server-side.** Only Hikvision support can remove it:
 
-**Contact Hikvision support** and ask them to unbind the device server-side:
+- Email: **techsupport.usa@mailservice.hikvision.com**
+- Portal: https://supportusa.hikvision.com
+- Phone: 1-855-655-9888 (Canada)
 
-1. **Email:** techsupport.usa@mailservice.hikvision.com
-2. **Ticket portal:** https://supportusa.hikvision.com
-3. **Phone (Canada):** 1-855-655-9888
-
-Provide:
-- Device serial number
-- MAC address
-- Current firmware version
-- Proof of physical access (photo of device)
-
-### Alternative: Remote Access Without Hik-Connect
-
-Set up **port forwarding** on your router:
-- Forward port 8000 (SDK) and 80 (HTTP) to the NVR's IP
-- Use **iVMS-4500** app to connect via your public IP/DDNS
+**Alternative:** Use port forwarding + iVMS-4500 app for remote access without Hik-Connect.
 
 ---
 
-## 14. NVR Configuration via API
-
-### Useful ISAPI Commands
+## 11. API Reference
 
 ```bash
 # Device info
 curl --digest -u "admin:PASS" "http://IP/ISAPI/System/deviceInfo"
-
-# Check firmware version
-curl --digest -u "admin:PASS" "http://IP/ISAPI/System/deviceInfo" | grep firmwareVersion
 
 # Format HDD
 curl --digest -u "admin:PASS" "http://IP/ISAPI/ContentMgmt/Storage/hdd/1/format" -X PUT
@@ -665,114 +310,74 @@ curl --digest -u "admin:PASS" "http://IP/ISAPI/ContentMgmt/Storage/hdd/1" -X PUT
   -H "Content-Type: application/xml" \
   -d '<hdd><id>1</id><property>RW</property><overWrite>true</overWrite></hdd>'
 
-# Check Hik-Connect status
+# Hik-Connect status
 curl --digest -u "admin:PASS" "http://IP/ISAPI/System/Network/EZVIZ"
 
 # Reboot
 curl --digest -u "admin:PASS" "http://IP/ISAPI/System/reboot" -X PUT
 
-# Factory reset (partial — keeps network)
+# Factory reset (partial)
 curl --digest -u "admin:PASS" "http://IP/ISAPI/System/factoryReset" -X PUT \
   -H "Content-Type: application/xml" -d '<factoryReset><mode>part</mode></factoryReset>'
-
-# Factory reset (full)
-curl --digest -u "admin:PASS" "http://IP/ISAPI/System/factoryReset" -X PUT \
-  -H "Content-Type: application/xml" -d '<factoryReset><mode>full</mode></factoryReset>'
 
 # Upload firmware (V4.30+ only)
 curl --digest -u "admin:PASS" "http://IP/ISAPI/System/updateFirmware" \
   -X PUT -T digicap.dav -H "Content-Type: application/octet-stream"
-
-# Check upgrade status
-curl --digest -u "admin:PASS" "http://IP/ISAPI/System/upgradeStatus"
-
-# Network config
-curl --digest -u "admin:PASS" "http://IP/ISAPI/System/Network/interfaces/1"
 ```
 
 ---
 
-## 15. Troubleshooting
+## 12. Troubleshooting
 
-### "upgrade packet mismatch"
-
-Wrong firmware for your hardware. Note the `device_class` from the error and try firmware from different folders on the EU portal. See [Section 6](#6-find-the-correct-firmware).
-
-### TFTP Transfer Timeout
-
-```
-Downloading: *
-T
-Retry count exceeded
-```
-
-- Check TFTP server shows **192.0.0.128** (not a different interface)
-- Ethernet cable must be **direct PC-to-NVR** (not through router)
-- Check Windows Firewall is disabled
-- Remove extra IPs from Ethernet adapter
-
-### "CRAMFS LOAD ERROR" After Flash
-
-The firmware was written but is incompatible. The NVR enters **auto-recovery TFTP mode**. Flash the correct firmware using the same process — the NVR will keep retrying.
-
-### USB-UART Adapter Disconnects During Boot
-
-PL2303HX clones reset when the NVR power-cycles (current spike). Workarounds:
-- Plug adapter into PC **after** NVR is powered on, then reboot NVR via web API
-- Use a **FT232RL** adapter instead (more stable)
-- Use the **PuTTY method** — it handles reconnections better than scripts
-
-### SADP Tool Doesn't Find NVR
-
-- Disable Windows Firewall
-- PC and NVR must be on the same network
-- Try closing and reopening SADP
-- SADP uses broadcast — may not work over some network configurations
-
-### Web UI "Browse" Button Doesn't Open File Dialog
-
-The web UI requires an ActiveX plugin that only works in **Internet Explorer**. Alternatives:
-- Upload firmware via API (V4.30+ only)
-- Use TFTP method
-- Use USB flash drive method
-
-### PL2303HX Shows "Error" After Windows Update
-
-Repeat the driver fix from [Section 3](#3-usb-uart-adapter-setup). Windows updates often revert the driver.
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| "upgrade packet mismatch" | Wrong firmware | Try different firmware file (see [Section 4](#4-firmware-selection)) |
+| TFTP timeout (`T` then retry) | Network issue | Check TFTP shows 192.0.0.128, cable is direct, firewall off |
+| "CRAMFS LOAD ERROR" on boot | Bad firmware flashed | NVR enters auto-recovery — flash correct firmware via TFTP |
+| Adapter disconnects during boot | PL2303HX power spike | Use FT232RL, or plug adapter after NVR is on then reboot via API |
+| SADP doesn't find NVR | Network/firewall | Disable firewall, same network, try Refresh |
+| Web UI Browse button broken | Needs ActiveX/IE plugin | Use API upload, TFTP, or USB stick instead |
+| tftpd64 switches interface | Windows auto-assigns extra IPs | Run `scripts/fix_ip.ps1` to keep only 192.0.0.128 |
 
 ---
 
-## Files in This Repository
+## Repository Structure
 
 ```
-hikvision-nvr-reset-guide/
-├── README.md                      ← You are here
-├── HOW_TO_RUN.md                  ← How to run PowerShell scripts
-├── UART_ADAPTER_SETUP.md          ← Detailed USB-UART adapter guide
-├── DIAGRAMS.md                    ← Visual wiring & flow diagrams
-├── AGENT_GUIDE.md                 ← Guide for AI assistants
+hikvision-firmware-toolkit/
+├── README.md                 ← You are here
+├── firmware/
+│   ├── README.md             ← Firmware download links & compatibility
+│   ├── v3.4.x_recovery_digicap.dav
+│   ├── v4.30.080_K75_NEU_digicap.dav
+│   └── v4.30.091_official_digicap.dav
 ├── scripts/
-│   ├── loopback_test.ps1          ← Test USB-UART adapter
-│   ├── uart_raw_test.ps1          ← Verify UART connection
-│   ├── uart_monitor.ps1           ← Find correct pins (beeps on data)
-│   ├── uart_tftp_flash.ps1        ← Automated flash script
-│   ├── fix_ip.ps1                 ← Lock Ethernet to 192.0.0.128
-│   └── setup_firewall.ps1         ← Windows Firewall rules for TFTP
+│   ├── loopback_test.ps1     ← Test USB-UART adapter
+│   ├── uart_raw_test.ps1     ← Verify UART connection
+│   ├── uart_monitor.ps1      ← Find correct pins
+│   ├── uart_tftp_flash.ps1   ← Automated flash script
+│   ├── fix_ip.ps1            ← Lock Ethernet to 192.0.0.128
+│   └── setup_firewall.ps1    ← Windows Firewall rules
+├── AGENT_GUIDE.md            ← Guide for AI assistants
+├── DIAGRAMS.md               ← Visual wiring & flow diagrams
+├── HOW_TO_RUN.md             ← How to run scripts
+├── UART_ADAPTER_SETUP.md     ← Adapter configuration details
+├── LICENSE                   ← MIT
 └── tools/
-    └── download_tools.md          ← Download links for all tools
+    └── download_tools.md     ← Download links for tftpd64, PuTTY, etc.
 ```
 
 ---
 
-## Quick Reference Card
+## Quick Reference
 
 ```
-UART Settings:        115200 8N1 No flow control
-NVR TFTP IP:          192.0.0.2
-PC TFTP Server IP:    192.0.0.128
-Firmware filename:    digicap.dav
-Boot interrupt key:   Ctrl+U (hold before power-on)
-Upgrade trigger:      u (at upgrade menu)
+UART:     115200 8N1, no flow control
+PC IP:    192.0.0.128
+NVR IP:   192.0.0.2
+Firmware: digicap.dav
+Boot key: Ctrl+U (hold before power-on)
+Upgrade:  u → 192.0.0.2 → 192.0.0.128 → y
 ```
 
 ---
@@ -781,32 +386,20 @@ Upgrade trigger:      u (at upgrade menu)
 
 | Component | Details |
 |-----------|---------|
-| NVR | DS-7108NI-Q1/8P (Board: DS-8025 PcEV1.0) |
+| NVR | DS-7108NI-Q1/8P (DS-8025 PcEV1.0) |
 | SoC | HiSilicon hi3536dv100 |
-| Original Firmware | V3.4.99 build 180706 |
-| Upgraded Firmware | V4.30.091 build 220919 |
+| Original FW | V3.4.99 build 180706 |
+| Upgraded FW | V4.30.091 build 220919 |
 | device_class | 0x5DE (1502) |
-| USB-UART Adapter | PL2303HX clone (budget, works but unreliable) |
-| TFTP Server | tftpd64 v4.74 portable |
-
-## Credits
-
-This guide was created from a real-world password reset project. The process involved extensive trial-and-error to find the correct firmware variant for a CIS-regional hardware revision, establish reliable UART communication with a budget PL2303HX adapter, and navigate Hikvision's complex firmware ecosystem across multiple hardware revisions and regional variants.
 
 ## Contributing
 
-Found a working firmware for a different `device_class`? Fixed the Hik-Connect cloud unbinding? Tested on a different NVR model? **Please open a PR or issue!**
-
-Community contributions that would be especially valuable:
-- Firmware compatibility results for other device_class values
-- UART pin mappings for other Hikvision NVR/DVR boards
-- Working unbinding methods for cloud-locked devices
-- Linux/macOS versions of the PowerShell scripts
+Found working firmware for a different `device_class`? Tested on another model? **Open a PR or issue!**
 
 ## Disclaimer
 
-This guide is for **legitimate device owners** who have lost access to their own equipment. Do not use this guide on devices you do not own. The authors are not responsible for any damage to equipment or violations of applicable laws.
+For **legitimate device owners** who lost access to their own equipment. Do not use on devices you do not own.
 
 ## License
 
-[MIT License](LICENSE)
+[MIT](LICENSE)
