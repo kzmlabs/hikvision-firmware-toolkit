@@ -1,5 +1,7 @@
-# Large downloads (not firmware we provide)
+# Large firmware binaries
 *.bin
+*.dav
+*.zip
 
 # TFTP server
 tftpd64/
