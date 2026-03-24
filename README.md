@@ -19,6 +19,7 @@ Factory reset a locked Hikvision NVR or IP camera when standard methods fail.
 | [NVR Reset (UART + TFTP)](#nvr-password-reset) | Admin password lost, SADP reset doesn't work |
 | [Camera Password Reset](CAMERA_PASSWORD_RESET.md) | Camera password known — change via API |
 | [Camera TFTP Recovery](CAMERA_PASSWORD_RESET.md#tftp-factory-reset) | Camera password unknown — flash firmware |
+| [UART Adapter Setup](UART_SETUP.md) | USB-UART adapter wiring, drivers, troubleshooting |
 
 ---
 
@@ -207,6 +208,7 @@ Factory reset does NOT clear Hik-Connect binding — it's server-side. Only Hikv
 hikvision/
 ├── README.md                      ← NVR reset guide
 ├── CAMERA_PASSWORD_RESET.md       ← Camera password reset guide
+├── UART_SETUP.md                  ← USB-UART adapter setup & drivers
 ├── firmware/
 │   ├── README.md                  ← Firmware sources & compatibility
 │   ├── digicap.dav                ← NVR V3.4.x recovery
