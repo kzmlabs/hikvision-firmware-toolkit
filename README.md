@@ -182,6 +182,107 @@ curl --digest -u "admin:PASS" "http://IP:PORT/ISAPI/System/updateFirmware" \
 
 ---
 
+## NVR Management
+
+### Current Setup (Buro9 Beauty Salon)
+
+| Channel | Name | Camera Model | IP (NVR PoE) |
+|---------|------|-------------|--------------|
+| 1 | Reception | DS-2CD1323G0-IU | 192.168.254.2 |
+| 2 | Washstation | DS-2CD1121-I | 192.168.254.11 |
+| 3 | Entrance | DS-2CD1323G0-IU | 192.168.254.4 |
+
+**NVR:** DS-7108NI-Q1/8P, firmware V4.30.091, IP 192.168.0.103, HTTP port 9080, SDK port 9000
+
+### Recording
+
+- Mode: **Motion detection only** (all channels)
+- Pre-record: 5 seconds (captures footage before motion trigger)
+- Post-record: 5 minutes (keeps recording after last motion)
+- HDD: 3.8 TB SATA, overwrite enabled
+- Audio recording: enabled on Entrance channel (built-in mic on DS-2CD1323G0-IU)
+
+### Network
+
+- Router: TP-Link TL-WR840N at 192.168.0.1
+- NVR HTTP: port 9080
+- NVR SDK: port 9000
+- NVR RTSP: port 554
+- WiFi SSID: Buro9
+- DDNS: kzmlabs-nvr.ddns.net (No-IP, monthly confirmation required)
+- NTP: pool.ntp.org (syncs every 60 min)
+
+### Remote Access
+
+DDNS via No-IP: `http://kzmlabs-nvr.ddns.net:9080`
+
+**Known issue:** Double NAT — ISP (RadioNet) does NAT before the router. Remote access requires ISP to provide public IP or bridge mode.
+
+### Useful Commands
+
+```bash
+# Check all cameras online
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/InputProxy/channels/status"
+
+# Search recordings (change dates)
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/search" \
+  -X POST -H "Content-Type: text/xml" \
+  -d '<?xml version="1.0" encoding="utf-8"?>
+<CMSearchDescription>
+<searchID>search1</searchID>
+<trackIDList><trackID>101</trackID><trackID>201</trackID><trackID>301</trackID></trackIDList>
+<timeSpanList><timeSpan>
+<startTime>2026-04-01T00:00:00Z</startTime>
+<endTime>2026-04-02T00:00:00Z</endTime>
+</timeSpan></timeSpanList>
+<maxResults>10</maxResults>
+<searchResultPostion>0</searchResultPostion>
+<metadataList><metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor></metadataList>
+</CMSearchDescription>'
+
+# Rename a camera channel
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/InputProxy/channels/1" \
+  -X PUT -H "Content-Type: application/xml" \
+  -d '<InputProxyChannel version="1.0" xmlns="http://www.hikvision.com/ver20/XMLSchema">
+  <id>1</id><name>NEW_NAME</name><sourceInputPortDescriptor>
+  <proxyProtocol>HIKVISION</proxyProtocol><addressingFormatType>ipaddress</addressingFormatType>
+  <ipAddress>CAMERA_IP</ipAddress><managePortNo>8000</managePortNo><srcInputPort>1</srcInputPort>
+  <userName>admin</userName><password>CAM_PASS</password>
+  <connMode>plugplay</connMode><streamType>auto</streamType>
+  </sourceInputPortDescriptor></InputProxyChannel>'
+
+# Enable/disable audio recording on a track
+# Get current config, modify SaveAudio, PUT back:
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/record/tracks/301" -s > track.xml
+# Edit <SaveAudio>true</SaveAudio> in track.xml
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/record/tracks/301" \
+  -X PUT -H "Content-Type: application/xml" -d @track.xml
+
+# Enable audio on camera stream
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/Streaming/channels/301" -s > stream.xml
+# Edit <Audio><enabled>true</enabled></Audio> in stream.xml
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/Streaming/channels/301" \
+  -X PUT -H "Content-Type: application/xml" -d @stream.xml
+
+# Switch recording mode (MOTION or CMR for continuous)
+# Get track, change <ActionRecordingMode>MOTION</ActionRecordingMode>, PUT back
+
+# Check HDD status
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/ContentMgmt/Storage/hdd"
+
+# Check/set NVR time
+curl --digest -u "admin:PASS" "http://NVR_IP:9080/ISAPI/System/time"
+```
+
+### Accessing Cameras Directly (via NVR PoE)
+
+1. Plug PC Ethernet into NVR PoE port 4-8
+2. Set PC IP: `netsh interface ip set address "Ethernet" static 192.168.254.100 255.255.255.0`
+3. Cameras at 192.168.254.x (scan with `arp -a` after broadcast ping)
+4. Restore: `netsh interface ip set address "Ethernet" dhcp`
+
+---
+
 ## Hik-Connect Cloud Unbinding
 
 Factory reset does NOT clear Hik-Connect binding — it's server-side. Only Hikvision support can remove it.
